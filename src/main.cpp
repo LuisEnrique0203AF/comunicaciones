@@ -33,7 +33,7 @@ void taskReadRFID(void *parameter);
 void taskControlActuators(void *parameter);
 
 void setup() { 
-  Serial.begin(9600); // Usar 115200 es más rápido y estándar
+  Serial.begin(115200); // Usar 115200 es más rápido y estándar
   SPI.begin();
   rfid.PCD_Init();
 
