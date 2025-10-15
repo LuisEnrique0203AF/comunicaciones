@@ -22,10 +22,9 @@ byte tarjetasAutorizadas[numTarjetas][4] = {
   {0xF3, 0xB9, 0x7C, 0x29}  // Tarjeta blanca con marca
 };
 
-// --- VARIABLE GLOBAL PARA COMUNICAR TAREAS ---
-// volatile asegura que la variable sea segura para usar entre tareas
+// --- 1. DEFINICIÓN DE LA COLA Y MENSAJES ---
+QueueHandle_t cardStatusQueue;
 enum CardStatus { NO_CARD, CARD_VALID, CARD_INVALID };
-volatile CardStatus currentCardStatus = NO_CARD;
 
 // --- PROTOTIPOS DE FUNCIONES ---
 bool compareUID(byte *uidLeido, byte *uidAutorizado);
@@ -33,45 +32,34 @@ void taskReadRFID(void *parameter);
 void taskControlActuators(void *parameter);
 
 void setup() { 
-  Serial.begin(115200); // Usar 115200 es más rápido y estándar
+  Serial.begin(115200);
   SPI.begin();
   rfid.PCD_Init();
 
   plumaServo.attach(SERVO_PIN);
-  plumaServo.write(0); // Posición cerrada (corregido)
+  plumaServo.write(0); // Posición cerrada
   
   pinMode(LED_ACCESS_GRANTED_PIN, OUTPUT);
   pinMode(LED_ACCESS_DENIED_PIN, OUTPUT);
   digitalWrite(LED_ACCESS_GRANTED_PIN, LOW);
   digitalWrite(LED_ACCESS_DENIED_PIN, HIGH);
 
-  Serial.println(F("Sistema de estacionamiento con FreeRTOS listo."));
+  // --- 2. CREACIÓN DE LA COLA ---
+  // Creamos una cola que puede almacenar hasta 5 mensajes de tipo 'CardStatus'
+  cardStatusQueue = xQueueCreate(5, sizeof(CardStatus));
 
-  // --- CREACIÓN DE LAS TAREAS DE FREERTOS ---
-  xTaskCreate(
-    taskReadRFID,         // Función de la tarea
-    "Read RFID Task",     // Nombre de la tarea
-    4096,                 // Tamaño de la pila (stack)
-    NULL,                 // Parámetros de la tarea
-    1,                    // Prioridad
-    NULL                  // Handle de la tarea
-  );
+  Serial.println(F("Sistema de estacionamiento (RTOS + Queue) listo."));
 
-  xTaskCreate(
-    taskControlActuators, // Función de la tarea
-    "Control Actuators Task", // Nombre
-    4096,                 // Stack
-    NULL,                 // Parámetros
-    1,                    // Prioridad
-    NULL                  // Handle
-  );
+  // Creación de las tareas (sin cambios)
+  xTaskCreate(taskReadRFID, "Read RFID Task", 4096, NULL, 1, NULL);
+  xTaskCreate(taskControlActuators, "Control Actuators Task", 4096, NULL, 1, NULL);
 }
 
 // ===============================================
-// TAREA 1: Leer constantemente el sensor RFID
+// TAREA 1: Leer el RFID y ENVIAR a la cola
 // ===============================================
 void taskReadRFID(void *parameter) {
-  for (;;) { // Bucle infinito de la tarea
+  for (;;) {
     if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
       bool tarjetaValida = false;
       for (int i = 0; i < numTarjetas; i++) {
@@ -81,60 +69,58 @@ void taskReadRFID(void *parameter) {
         }
       }
 
-      if (tarjetaValida) {
-        currentCardStatus = CARD_VALID; // Avisa a la otra tarea que la tarjeta es válida
-      } else {
-        currentCardStatus = CARD_INVALID; // Avisa que la tarjeta es inválida
-      }
+      // --- 3. ENVIAR MENSAJE A LA COLA ---
+      CardStatus statusToSend = tarjetaValida ? CARD_VALID : CARD_INVALID;
+      xQueueSend(cardStatusQueue, &statusToSend, portMAX_DELAY);
 
       rfid.PICC_HaltA();
       rfid.PCD_StopCrypto1();
     }
-    vTaskDelay(pdMS_TO_TICKS(100)); // Pequeña pausa para ceder el control a otras tareas
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
 
 // ===============================================
-// TAREA 2: Controlar el servo y los LEDs
+// TAREA 2: RECIBIR de la cola y actuar
 // ===============================================
 void taskControlActuators(void *parameter) {
-  for (;;) { // Bucle infinito de la tarea
-    if (currentCardStatus == CARD_VALID) {
-      Serial.println(F("ACCESO PERMITIDO"));
-      digitalWrite(LED_ACCESS_GRANTED_PIN, HIGH);
-      digitalWrite(LED_ACCESS_DENIED_PIN, LOW);
+  CardStatus receivedStatus;
 
-      Serial.println(F("...Pluma abriendo..."));
-      plumaServo.write(90); // Posición abierta
-
-      vTaskDelay(pdMS_TO_TICKS(5000)); // Espera 5 segundos SIN bloquear la otra tarea
-
-      Serial.println(F("...Pluma cerrando..."));
-      plumaServo.write(0); // Posición cerrada
-
-      digitalWrite(LED_ACCESS_GRANTED_PIN, LOW);
-      digitalWrite(LED_ACCESS_DENIED_PIN, HIGH);
+  for (;;) {
+    // --- 4. ESPERAR Y RECIBIR MENSAJE DE LA COLA ---
+    // La tarea se bloqueará aquí hasta que reciba un mensaje. No consume CPU.
+    if (xQueueReceive(cardStatusQueue, &receivedStatus, portMAX_DELAY) == pdPASS) {
       
-      currentCardStatus = NO_CARD; // Restablece el estado
-    
-    } else if (currentCardStatus == CARD_INVALID) {
-      Serial.println(F("ACCESO DENEGADO - Tarjeta incorrecta"));
-      for (int i = 0; i < 3; i++) {
+      if (receivedStatus == CARD_VALID) {
+        Serial.println(F("ACCESO PERMITIDO"));
+        digitalWrite(LED_ACCESS_GRANTED_PIN, HIGH);
         digitalWrite(LED_ACCESS_DENIED_PIN, LOW);
-        vTaskDelay(pdMS_TO_TICKS(150));
+
+        Serial.println(F("...Pluma abriendo..."));
+        plumaServo.write(90);
+
+        vTaskDelay(pdMS_TO_TICKS(5000));
+
+        Serial.println(F("...Pluma cerrando..."));
+        plumaServo.write(0);
+
+        digitalWrite(LED_ACCESS_GRANTED_PIN, LOW);
         digitalWrite(LED_ACCESS_DENIED_PIN, HIGH);
-        vTaskDelay(pdMS_TO_TICKS(150));
+      
+      } else if (receivedStatus == CARD_INVALID) {
+        Serial.println(F("ACCESO DENEGADO - Tarjeta incorrecta"));
+        for (int i = 0; i < 3; i++) {
+          digitalWrite(LED_ACCESS_DENIED_PIN, LOW);
+          vTaskDelay(pdMS_TO_TICKS(150));
+          digitalWrite(LED_ACCESS_DENIED_PIN, HIGH);
+          vTaskDelay(pdMS_TO_TICKS(150));
+        }
       }
-      currentCardStatus = NO_CARD; // Restablece el estado
     }
-    
-    vTaskDelay(pdMS_TO_TICKS(100)); // Revisa el estado cada 100ms
   }
 }
 
-// ===============================================
 // Función de comparación (sin cambios)
-// ===============================================
 bool compareUID(byte *uidLeido, byte *uidAutorizado) {
   for (byte i = 0; i < 4; i++) {
     if (uidLeido[i] != uidAutorizado[i]) {
@@ -144,7 +130,6 @@ bool compareUID(byte *uidLeido, byte *uidAutorizado) {
   return true;
 }
 
-// El loop principal ahora está vacío, porque el planificador de FreeRTOS se encarga de todo.
 void loop() {
-  vTaskDelete(NULL); // Opcional: Borra la tarea del loop de Arduino para liberar recursos.
+  vTaskDelete(NULL);
 }
