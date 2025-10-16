@@ -3,10 +3,10 @@
 #include <ESP32Servo.h>
 #include <WiFi.h>
 #include <time.h>
-#include "PubSubClient.h" // <-- Librería MQTT
+#include "PubSubClient.h"
 
 // =========================================================
-// --- CONFIGURACIÓN (Tus datos) ---
+// --- CONFIGURACIÓN (Tus datos actualizados) ---
 // =========================================================
 
 // --- WiFi ---
@@ -61,7 +61,7 @@ QueueHandle_t userIndexQueue;
 // =========================================================
 void taskReadRFID(void *parameter);
 void taskControlActuators(void *parameter);
-void taskMqttManager(void *parameter); // <-- Nueva tarea para MQTT
+void taskMqttManager(void *parameter);
 void mqttReconnect();
 void callback(char* topic, byte* message, unsigned int length);
 void publishAccessEvent(int userIndex);
@@ -69,10 +69,10 @@ void publishAccessEvent(int userIndex);
 // =========================================================
 // --- SETUP ---
 // =========================================================
-void setup() { 
+void setup() {
   Serial.begin(115200);
 
-  // --- Conexión WiFi ---
+  // Conexiones y hardware (sin cambios)
   Serial.print("Conectando a ");
   Serial.println(ssid);
   WiFi.begin(ssid, password);
@@ -83,14 +83,9 @@ void setup() {
   Serial.println("\nWiFi conectado! IP: ");
   Serial.println(WiFi.localIP());
 
-  // --- Sincronización de Hora ---
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-
-  // --- Configuración MQTT ---
   client.setServer(mqttServer, mqttPort);
   client.setCallback(callback);
-
-  // --- Inicialización de hardware ---
   SPI.begin();
   rfid.PCD_Init();
   plumaServo.attach(SERVO_PIN);
@@ -99,23 +94,19 @@ void setup() {
   pinMode(LED_ACCESS_DENIED_PIN, OUTPUT);
   digitalWrite(LED_ACCESS_GRANTED_PIN, LOW);
   digitalWrite(LED_ACCESS_DENIED_PIN, HIGH);
-
-  // --- Creación de la Cola ---
   userIndexQueue = xQueueCreate(5, sizeof(int));
 
   Serial.println(F("\nSistema de estacionamiento listo."));
 
-  // --- Creación de Tareas FreeRTOS ---
+  // Creación de Tareas FreeRTOS
   xTaskCreate(taskReadRFID, "Read RFID Task", 4096, NULL, 1, NULL);
   xTaskCreate(taskControlActuators, "Control Actuators Task", 4096, NULL, 1, NULL);
-  xTaskCreate(taskMqttManager, "MQTT Manager Task", 4096, NULL, 1, NULL); // <-- Iniciamos la tarea MQTT
+  xTaskCreate(taskMqttManager, "MQTT Manager Task", 4096, NULL, 1, NULL);
 }
 
 // =========================================================
-// --- TAREAS FREERTOS ---
+// --- TAREAS FREERTOS (Sin cambios) ---
 // =========================================================
-
-// TAREA 1: Leer RFID (sin cambios)
 void taskReadRFID(void *parameter) {
   for (;;) {
     if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
@@ -128,10 +119,7 @@ void taskReadRFID(void *parameter) {
             break;
           }
         }
-        if (match) {
-          userIndex = i;
-          break;
-        }
+        if (match) { userIndex = i; break; }
       }
       xQueueSend(userIndexQueue, &userIndex, portMAX_DELAY);
       rfid.PICC_HaltA();
@@ -141,15 +129,12 @@ void taskReadRFID(void *parameter) {
   }
 }
 
-// TAREA 2: Controlar actuadores y llamar a la publicación MQTT
 void taskControlActuators(void *parameter) {
   int receivedUserIndex;
   for (;;) {
     if (xQueueReceive(userIndexQueue, &receivedUserIndex, portMAX_DELAY) == pdPASS) {
-      publishAccessEvent(receivedUserIndex); // <-- Publica el evento a MQTT
-
+      publishAccessEvent(receivedUserIndex);
       if (receivedUserIndex != -1) {
-        // Lógica de servo y LEDs (sin cambios)
         digitalWrite(LED_ACCESS_GRANTED_PIN, HIGH);
         digitalWrite(LED_ACCESS_DENIED_PIN, LOW);
         plumaServo.write(90);
@@ -158,7 +143,6 @@ void taskControlActuators(void *parameter) {
         digitalWrite(LED_ACCESS_GRANTED_PIN, LOW);
         digitalWrite(LED_ACCESS_DENIED_PIN, HIGH);
       } else {
-        // Lógica de acceso denegado (sin cambios)
         for (int i = 0; i < 3; i++) {
           digitalWrite(LED_ACCESS_DENIED_PIN, LOW);
           vTaskDelay(pdMS_TO_TICKS(150));
@@ -170,85 +154,75 @@ void taskControlActuators(void *parameter) {
   }
 }
 
-// TAREA 3: Gestionar la conexión MQTT
 void taskMqttManager(void *parameter) {
   for (;;) {
     if (!client.connected()) {
       mqttReconnect();
     }
-    client.loop(); // Esencial para mantener la conexión y recibir mensajes
-    vTaskDelay(pdMS_TO_TICKS(50)); // Pausa para no saturar el CPU
+    client.loop();
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
 
 // =========================================================
-// --- FUNCIONES MQTT ---
+// --- FUNCIÓN MQTT MODIFICADA ---
 // =========================================================
 
-// Función para publicar el evento de acceso
 void publishAccessEvent(int userIndex) {
   if (!client.connected()) {
     Serial.println("No se puede publicar, cliente MQTT desconectado.");
     return;
   }
 
-  // Obtiene la hora actual
+  // --- 1. Obtener los datos ---
   char timeBuffer[20];
   struct tm timeinfo;
   getLocalTime(&timeinfo);
   strftime(timeBuffer, sizeof(timeBuffer), "%Y-%m-%d %H:%M:%S", &timeinfo);
 
-  // Define el estado y el nombre de usuario
   const char* status = (userIndex != -1) ? "Permitido" : "Denegado";
   const char* userName = (userIndex != -1) ? tarjetasAutorizadas[userIndex].name : "Desconocido";
 
-  // Crea el mensaje en formato JSON
-  char jsonPayload[256];
-  snprintf(jsonPayload, sizeof(jsonPayload), 
-    "{\"status\":\"%s\", \"usuario\":\"%s\", \"timestamp\":\"%s\"}", 
-    status, userName, timeBuffer);
+  // --- 2. Definir tópicos y publicar cada dato por separado ---
+  Serial.println("--- Publicando evento de acceso a MQTT ---");
 
-  // Publica el mensaje
-  const char* topic = "estacionamiento/accesos";
-  client.publish(topic, jsonPayload);
+  // Publicar Usuario
+  client.publish("estacionamiento/entrada/usuario", userName);
+  Serial.printf("  -> Tópico: estacionamiento/entrada/usuario | Mensaje: %s\n", userName);
 
-  Serial.printf("MQTT Publicado -> Tópico: %s | Mensaje: %s\n", topic, jsonPayload);
+  // Publicar Tiempo
+  client.publish("estacionamiento/entrada/tiempo", timeBuffer);
+  Serial.printf("  -> Tópico: estacionamiento/entrada/tiempo | Mensaje: %s\n", timeBuffer);
+
+  // Publicar Status
+  client.publish("estacionamiento/entrada/status", status);
+  Serial.printf("  -> Tópico: estacionamiento/entrada/status | Mensaje: %s\n", status);
+
+  Serial.println("-------------------------------------------");
 }
 
-// Función de reconexión (tomada de tu ejemplo)
+// =========================================================
+// --- OTRAS FUNCIONES (Sin cambios) ---
+// =========================================================
 void mqttReconnect() {
   while (!client.connected()) {
     Serial.print("Intentando conexión MQTT...");
     char clientId[50];
     sprintf(clientId, "ESP32_Estacionamiento-%ld", random(1000));
-    
     if (client.connect(clientId, mqttUser, mqttPassword)) {
       Serial.println(" conectado!");
-      // Suscribirse a un tópico para comandos remotos (ej. abrir pluma)
       client.subscribe("estacionamiento/comandos");
-      Serial.println("Suscrito a 'estacionamiento/comandos'");
     } else {
       Serial.print(" falló, rc=");
       Serial.print(client.state());
       Serial.println(" -> Intentando de nuevo en 5 segundos");
-      delay(5000); // Usamos delay() aquí porque estamos en un bucle de reconexión crítico
+      delay(5000);
     }
   }
 }
 
-// Callback para mensajes entrantes (tomado de tu ejemplo)
 void callback(char* topic, byte* message, unsigned int length) {
-  Serial.print("Mensaje recibido en [");
-  Serial.print(topic);
-  Serial.print("] ");
-  String stMessage;
-  for (int i = 0; i < length; i++) {
-    stMessage += (char)message[i];
-  }
-  Serial.println(stMessage);
-  
-  // Aquí podrías añadir lógica para comandos remotos
-  // ej: if (stMessage == "abrir") { plumaServo.write(90); }
+  // Lógica para recibir comandos (no se usa por ahora)
 }
 
 void loop() {
