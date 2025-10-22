@@ -66,8 +66,6 @@ void mqttReconnect();
 void callback(char* topic, byte* message, unsigned int length);
 void publishAccessEvent(int userIndex);
 long getHcsr04Distance(); // Función para leer el sensor
-
-// --- NUEVOS PROTOTIPOS DE APERTURA ---
 void openBarrierWithSensorLogic(); // Para el RFID
 void openBarrierRemote();          // Para Node-RED
 
@@ -95,16 +93,15 @@ void setup() {
   plumaServo.write(0);
   pinMode(LED_ACCESS_GRANTED_PIN, OUTPUT);
   pinMode(LED_ACCESS_DENIED_PIN, OUTPUT);
-
-  // --- INICIALIZAR PINES DEL SENSOR ---
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
-
   digitalWrite(LED_ACCESS_GRANTED_PIN, LOW);
   digitalWrite(LED_ACCESS_DENIED_PIN, HIGH);
   
   userIndexQueue = xQueueCreate(5, sizeof(int));
-  Serial.println(F("\nSistema de estacionamiento listo."));
+  
+  // --- CAMBIO ---
+  Serial.println(F("\nSistema de estacionamiento [SALIDA] listo."));
   
   xTaskCreate(taskReadRFID, "Read RFID Task", 4096, NULL, 1, NULL);
   xTaskCreate(taskControlActuators, "Control Actuators Task", 4096, NULL, 1, NULL);
@@ -114,10 +111,11 @@ void setup() {
 // =========================================================
 // --- TAREAS FREERTOS ---
 // =========================================================
+// (taskReadRFID, taskControlActuators, taskMqttManager)
+// ... ESTAS 3 TAREAS SON IDÉNTICAS, NO REQUIEREN CAMBIOS ...
 
 /**
  * TAREA 1: Leer RFID (Con estabilización)
- * (Esta tarea queda sin cambios respecto a la versión anterior)
  */
 void taskReadRFID(void *parameter) {
   
@@ -138,7 +136,6 @@ void taskReadRFID(void *parameter) {
       }
     } else {
       // --- ESTADO: HAY UN AUTO ---
-      // 1. ¿Hay una tarjeta RFID?
       if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
         Serial.println("Leyendo tarjeta...");
         int userIndex = -1;
@@ -163,7 +160,6 @@ void taskReadRFID(void *parameter) {
         vTaskDelay(pdMS_TO_TICKS(5000)); 
 
       } 
-      // 2. No hay tarjeta, ¿El auto se fue?
       else if (getHcsr04Distance() >= UMBRAL_DISTANCIA) {
         vTaskDelay(pdMS_TO_TICKS(confirmationTime));
         if (getHcsr04Distance() >= UMBRAL_DISTANCIA) {
@@ -171,7 +167,6 @@ void taskReadRFID(void *parameter) {
            isCarStablePresent = false; 
         }
       }
-      // 3. No hay tarjeta y el auto sigue ahí
       else {
          vTaskDelay(pdMS_TO_TICKS(50));
       }
@@ -180,28 +175,19 @@ void taskReadRFID(void *parameter) {
 }
 
 /**
- * TAREA 2: Controlar actuadores (MODIFICADA)
- * Llama a la función de apertura correcta según el caso.
+ * TAREA 2: Controlar actuadores
  */
 void taskControlActuators(void *parameter) {
   int receivedUserIndex;
   for (;;) {
     if (xQueueReceive(userIndexQueue, &receivedUserIndex, portMAX_DELAY) == pdPASS) {
-      // Publicar el evento (permitido, denegado, remoto)
       publishAccessEvent(receivedUserIndex);
 
-      // --- ESTA ES LA LÓGICA CORREGIDA ---
-      
-      // Si el acceso fue permitido (por RFID)
       if (receivedUserIndex >= 0) {
-        openBarrierWithSensorLogic(); // <--- LLAMA A LA FUNCIÓN CON SENSOR
-      
-      // Si el acceso fue permitido (por Comando Remoto)
+        openBarrierWithSensorLogic(); 
       } else if (receivedUserIndex == REMOTE_OPEN_COMMAND) {
-        openBarrierRemote(); // <--- LLAMA A LA FUNCIÓN SIMPLE CON TIMER
-      
+        openBarrierRemote(); 
       } else { 
-        // Acceso denegado (userIndex == -1)
         for (int i = 0; i < 3; i++) {
           digitalWrite(LED_ACCESS_DENIED_PIN, LOW);
           vTaskDelay(pdMS_TO_TICKS(150));
@@ -214,7 +200,7 @@ void taskControlActuators(void *parameter) {
 }
 
 /**
- * TAREA 3: Gestionar MQTT (Sin cambios)
+ * TAREA 3: Gestionar MQTT
  */
 void taskMqttManager(void *parameter) {
   for (;;) {
@@ -226,9 +212,11 @@ void taskMqttManager(void *parameter) {
   }
 }
 
+
 // =========================================================
 // --- FUNCIÓN: LEER SENSOR HC-SR04 ---
 // =========================================================
+// ... ESTA FUNCIÓN ES IDÉNTICA, NO REQUIERE CAMBIOS ...
 long getHcsr04Distance() {
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
@@ -247,20 +235,17 @@ long getHcsr04Distance() {
 // =========================================================
 // --- FUNCIONES AUXILIARES DE APERTURA ---
 // =========================================================
+// ... ESTAS 2 FUNCIONES SON IDÉNTICAS, NO REQUIEREN CAMBIOS ...
 
 /**
- * NUEVA FUNCIÓN: Apertura para MODO REMOTO (Node-RED)
- * Simplemente abre, espera 5 seg, y cierra. No usa el sensor.
+ * Apertura para MODO REMOTO (Node-RED)
  */
 void openBarrierRemote() {
   digitalWrite(LED_ACCESS_GRANTED_PIN, HIGH);
   digitalWrite(LED_ACCESS_DENIED_PIN, LOW);
   plumaServo.write(90);
   Serial.println("Pluma abierta (Remoto).");
-
-  // Espera un tiempo fijo
   vTaskDelay(pdMS_TO_TICKS(5000)); 
-
   Serial.println("Cerrando pluma (Remoto).");
   plumaServo.write(0);
   digitalWrite(LED_ACCESS_GRANTED_PIN, LOW);
@@ -269,8 +254,7 @@ void openBarrierRemote() {
 
 
 /**
- * FUNCIÓN RENOMBRADA: Apertura para RFID (CON LÓGICA DE SENSOR)
- * Usa el sensor para NO cerrar si hay un auto.
+ * Apertura para RFID (CON LÓGICA DE SENSOR)
  */
 void openBarrierWithSensorLogic() {
   digitalWrite(LED_ACCESS_GRANTED_PIN, HIGH);
@@ -309,7 +293,6 @@ void openBarrierWithSensorLogic() {
     
   } while (distancia < UMBRAL_DISTANCIA || !autoDetectado); 
   
-  // --- CERRAR PLUMA ---
   Serial.println("Camino libre. Cerrando pluma.");
   plumaServo.write(0);
   digitalWrite(LED_ACCESS_GRANTED_PIN, LOW);
@@ -318,10 +301,11 @@ void openBarrierWithSensorLogic() {
 
 
 // =========================================================
-// --- FUNCIONES MQTT (Sin cambios) ---
+// --- FUNCIONES MQTT (MODIFICADAS PARA LA SALIDA) ---
 // =========================================================
 
-// Función de publicación MQTT (Sin cambios)
+// --- CAMBIO ---
+// Función de publicación MQTT
 void publishAccessEvent(int userIndex) {
     if (!client.connected()) return;
     char timeBuffer[20];
@@ -341,22 +325,32 @@ void publishAccessEvent(int userIndex) {
         status = "Denegado";
         userName = "Desconocido";
     }
-    client.publish("estacionamiento/entrada/usuario", userName);
-    client.publish("estacionamiento/entrada/tiempo", timeBuffer);
-    client.publish("estacionamiento/entrada/status", status);
-    Serial.printf("--- Evento publicado: Usuario: %s, Status: %s ---\n", userName, status);
+
+    // Publica en los tópicos de "salida"
+    client.publish("estacionamiento/salida/usuario", userName);
+    client.publish("estacionamiento/salida/tiempo", timeBuffer);
+    client.publish("estacionamiento/salida/status", status);
+    
+    Serial.printf("--- Evento publicado [SALIDA]: Usuario: %s, Status: %s ---\n", userName, status);
 }
 
-// Función de reconexión MQTT (Sin cambios)
+// --- CAMBIO ---
+// Función de reconexión MQTT
 void mqttReconnect() {
   while (!client.connected()) {
     Serial.print("Intentando conexión MQTT...");
+    
+    // ClientID único para la SALIDA
     char clientId[50];
-    sprintf(clientId, "ESP32_Estacionamiento-%ld", random(1000));
+    sprintf(clientId, "ESP32_Estacionamiento_Salida-%ld", random(1000));
+    
     if (client.connect(clientId, mqttUser, mqttPassword)) {
       Serial.println(" conectado!");
-      client.subscribe("estacionamiento/entrada/comando");
-      Serial.println("Suscrito a 'estacionamiento/entrada/comando'");
+      
+      // Se suscribe al tópico de comando de "salida"
+      client.subscribe("estacionamiento/salida/comando");
+      Serial.println("Suscrito a 'estacionamiento/salida/comando'");
+      
     } else {
       Serial.print(" falló, rc=");
       Serial.print(client.state());
@@ -366,7 +360,8 @@ void mqttReconnect() {
   }
 }
 
-// Función de Callback (Sin cambios)
+// --- CAMBIO ---
+// Función de Callback
 void callback(char* topic, byte* message, unsigned int length) {
   String stMessage;
   for (int i = 0; i < length; i++) {
@@ -374,7 +369,8 @@ void callback(char* topic, byte* message, unsigned int length) {
   }
   Serial.printf("Mensaje recibido en [%s]: %s\n", topic, stMessage.c_str());
 
-  if (String(topic) == "estacionamiento/entrada/comando") {
+  // Revisa el tópico de comando de "salida"
+  if (String(topic) == "estacionamiento/salida/comando") {
     if (stMessage == "abrir") {
       Serial.println("Comando de apertura remota recibido!");
       int command = REMOTE_OPEN_COMMAND;
