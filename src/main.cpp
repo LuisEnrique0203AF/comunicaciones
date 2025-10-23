@@ -123,15 +123,15 @@ void setup() {
   Serial.println("Inicializando sensores VL53L0X...");
 
   // ===== Sensor 1 (opcional) =====
-  // Serial.println("Activando sensor #1 (dirección 0x30)...");
-  // digitalWrite(XSHUT_1, HIGH);
-  // delay(10);
-  // if (!sensor1.init(true)) {
-  //   Serial.println("Error: no se detecta el sensor #1");
-  //   while (1);
-  // }
-  // sensor1.setAddress(0x30);
-  // sensor1.startContinuous();
+   Serial.println("Activando sensor #1 (dirección 0x30)...");
+   digitalWrite(XSHUT_1, HIGH);
+   delay(10);
+   if (!sensor1.init(true)) {
+     Serial.println("Error: no se detecta el sensor #1");
+     while (1);
+   }
+   sensor1.setAddress(0x30);
+ sensor1.startContinuous();
 
   // ===== Sensor 2 =====
   Serial.println("Activando sensor #2 (dirección 0x31)...");
@@ -159,7 +159,7 @@ void setup() {
   Serial.println("--- Creando Tareas de RTOS ---");
 
   // --- Crear tareas ---
-  // xTaskCreate(sensorTask, "Sensor 1 Task", 2048, (void*)&dataS1, 1, NULL); // ← Sensor 1 comentado
+  xTaskCreate(sensorTask, "Sensor 1 Task", 2048, (void*)&dataS1, 1, NULL); // ← Sensor 1 comentado
   xTaskCreate(sensorTask, "Sensor 2 Task", 2048, (void*)&dataS2, 1, NULL);
   xTaskCreate(sensorTask, "Sensor 3 Task", 2048, (void*)&dataS3, 1, NULL);
 
