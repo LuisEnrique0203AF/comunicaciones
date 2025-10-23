@@ -8,9 +8,9 @@
 #include <WiFi.h>
 #include <time.h>
 #include "PubSubClient.h"
-#include <Wire.h>                 // <-- LIBRERÍA NUEVA
-#include <Adafruit_Sensor.h>      // <-- LIBRERÍA NUEVA
-#include <Adafruit_BME280.h>    // <-- LIBRERÍA NUEVA
+#include <Wire.h>              // <-- LIBRERÍA NUEVA
+#include <Adafruit_Sensor.h>   // <-- LIBRERÍA NUEVA
+#include <Adafruit_BME280.h>   // <-- LIBRERÍA NUEVA
 
 // =========================================================
 // --- CONFIGURACIÓN (Tus datos actualizados) ---
@@ -175,7 +175,7 @@ void taskReadRFID(void *parameter) {
         
         Serial.println("Tarjeta procesada. Esperando a que el auto pase...");
         isCarStablePresent = false;
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        vTaskDelay(pdMS_TO_TICKS(5000)); // <-- Un pequeño delay para que la otra tarea tome control
 
       }
       else if (getHcsr04Distance() >= UMBRAL_DISTANCIA) {
@@ -258,10 +258,10 @@ void taskReadBME280(void *parameter) {
       dtostrf(presion, 6, 2, presStr);
       dtostrf(humedad, 4, 2, humStr);
 
-      // Publica en los tópicos de "salida"
-      client.publish("estacionamiento/salida/temperatura", tempStr);
-      client.publish("estacionamiento/salida/humedad", humStr);
-      client.publish("estacionamiento/salida/presion", presStr);
+      // Publica en los tópicos de "ambiente"
+      client.publish("estacionamiento/ambiente/temperatura", tempStr);
+      client.publish("estacionamiento/ambiente/humedad", humStr);
+      client.publish("estacionamiento/ambiente/presion", presStr);
     }
 
     // Espera 1 minuto (60,000 ms) para la siguiente lectura
@@ -279,10 +279,11 @@ long getHcsr04Distance() {
   digitalWrite(TRIG_PIN, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
-  long duration = pulseIn(ECHO_PIN, HIGH, 1000000);
+  // Aumentar el timeout del pulseIn puede ayudar a evitar lecturas '0'
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000); // 30ms timeout
   long distance = (duration * 0.0343) / 2;
   if (distance == 0) {
-    return 999;
+    return 999; // Retorna 999 si el pulso falló (timeout)
   }
   return distance;
 }
@@ -309,7 +310,8 @@ void openBarrierRemote() {
 
 
 /**
- * Apertura para RFID (CON LÓGICA DE SENSOR)
+ * Apertura para RFID (CON LÓGICA DE SENSOR Y TIMEOUT)
+ * <<< ESTA ES LA FUNCIÓN CORREGIDA >>>
  */
 void openBarrierWithSensorLogic() {
   digitalWrite(LED_ACCESS_GRANTED_PIN, HIGH);
@@ -321,7 +323,12 @@ void openBarrierWithSensorLogic() {
   Serial.println("Esperando a que el auto pase...");
 
   long distancia = 0;
-  bool autoDetectado = false;
+  bool autoDetectado = false; // Flag para saber si el auto está DEBAJO
+
+  // --- Lógica de Timeout ---
+  uint32_t startTime = millis(); // Guarda el tiempo de inicio
+  const uint32_t TIMEOUT_MS = 15000; // Timeout de 15 segundos
+  // --- Fin Lógica de Timeout ---
 
   do {
     distancia = getHcsr04Distance();
@@ -330,7 +337,7 @@ void openBarrierWithSensorLogic() {
     if (distancia < UMBRAL_DISTANCIA) {
       if (!autoDetectado) {
         Serial.println("¡Auto detectado! Esperando a que pase...");
-        autoDetectado = true;
+        autoDetectado = true; // El auto está pasando por debajo
       }
       digitalWrite(LED_ACCESS_GRANTED_PIN, LOW);
       vTaskDelay(pdMS_TO_TICKS(200));
@@ -338,15 +345,25 @@ void openBarrierWithSensorLogic() {
       vTaskDelay(pdMS_TO_TICKS(200));
 
     } else if (autoDetectado) {
+      // El auto ESTABA debajo (autoDetectado=true) y AHORA ya no está (distancia >= 15)
       Serial.println("Auto parece haber pasado. Dando 1 segundo de gracia...");
       vTaskDelay(pdMS_TO_TICKS(1000));
-      break;
+      break; // <-- Salida normal del bucle
 
     } else {
+      // El auto NO está debajo (distancia >= 15) y NUNCA se detectó (autoDetectado=false)
       vTaskDelay(pdMS_TO_TICKS(500));
     }
     
-  } while (distancia < UMBRAL_DISTANCIA || !autoDetectado);
+    // --- Chequeo de Timeout ---
+    // Si han pasado más de 15 segundos Y NUNCA detectamos al auto pasar...
+    if (!autoDetectado && (millis() - startTime > TIMEOUT_MS)) {
+        Serial.println("¡Timeout! El auto no cruzó (o pasó muy rápido). Cerrando pluma.");
+        break; // <-- Salida de emergencia del bucle
+    }
+    // --- Fin Chequeo de Timeout ---
+    
+  } while (distancia < UMBRAL_DISTANCIA || !autoDetectado); // Condición original
   
   Serial.println("Camino libre. Cerrando pluma.");
   plumaServo.write(0);
@@ -373,7 +390,7 @@ void publishAccessEvent(int userIndex) {
         status = "Permitido (Remoto)";
         userName = "Dashboard";
     } else if (userIndex != -1) {
-        status = "Permititdo";
+        status = "Permitido"; // Corregí "Permititdo"
         userName = tarjetasAutorizadas[userIndex].name;
     } else {
         status = "Denegado";
