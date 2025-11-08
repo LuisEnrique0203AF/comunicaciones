@@ -8,8 +8,8 @@
 #include <WiFi.h>
 #include <time.h>
 #include "PubSubClient.h"
-#include <Wire.h>           // <-- Para I2C (BH1750)
-#include <BH1750.h>         // <-- LIBRERÍA NUEVA
+#include <Wire.h>         // <-- Para I2C (BH1750)
+#include <BH1750.h>       // <-- LIBRERÍA NUEVA
 
 // =========================================================
 // --- CONFIGURACIÓN (Tus datos actualizados) ---
@@ -27,21 +27,26 @@ const int   daylightOffset_sec = 0;
 // =========================================================
 // --- PINES Y OBJETOS ---
 // =========================================================
-#define SS_PIN    5
+#define SS_PIN  5
 #define RST_PIN   4
 #define LED_ACCESS_GRANTED_PIN  13
 #define LED_ACCESS_DENIED_PIN   12
 #define SERVO_PIN               2
+#define RELAY_PIN               27  // <-- Pin para controlar el relay de luces
 
 // --- PINES PARA EL SENSOR ULTRASÓNICO ---
 #define TRIG_PIN 26
 #define ECHO_PIN 25
 #define UMBRAL_DISTANCIA 15 // Distancia en cm para detectar un auto
 
+// --- UMBRALES DE LUZ (CON HISTERESIS) ---
+#define UMBRAL_LUZ_ON   50.0   // Nivel de Lux para ENCENDER las luces
+#define UMBRAL_LUZ_OFF  650.0//ivel de Lux para APAGAR las luces
+
 // --- OBJETOS DE SENSORES Y ACTUADORES ---
 MFRC522 rfid(SS_PIN, RST_PIN);
 Servo plumaServo;
-BH1750 lightMeter; // Objeto para BH1750 (I2C) <-- NUEVO
+BH1750 lightMeter; // Objeto para BH1750 (I2C)
 
 // --- OBJETOS DE RED ---
 WiFiClient espClient;
@@ -72,7 +77,7 @@ const int REMOTE_OPEN_COMMAND = -2;
 void taskReadRFID(void *parameter);
 void taskControlActuators(void *parameter);
 void taskMqttManager(void *parameter);
-void taskReadBH1750(void *parameter); // <-- PROTOTIPO NUEVO
+void taskReadBH1750(void *parameter); 
 void mqttReconnect();
 void callback(char* topic, byte* message, unsigned int length);
 void publishAccessEvent(int userIndex);
@@ -100,15 +105,14 @@ void setup() {
   
   // --- INICIALIZACIÓN DE PERIFÉRICOS ---
   SPI.begin();      // Para el RFID
-  Wire.begin();     // Para el BH1750 (Pines 21=SDA, 22=SCL) <-- NUEVO
+  Wire.begin();     // Para el BH1750 (Pines 21=SDA, 22=SCL)
   rfid.PCD_Init();
   
-  // Iniciar BH1750 <-- NUEVO
+  // Iniciar BH1750
   if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
     Serial.println("Sensor BH1750 encontrado. ¡Listo!");
   } else {
     Serial.println("¡Error! No se pudo encontrar el sensor BH1750.");
-    // No detenemos el programa, solo avisamos
   }
   
   plumaServo.attach(SERVO_PIN);
@@ -117,18 +121,23 @@ void setup() {
   pinMode(LED_ACCESS_DENIED_PIN, OUTPUT);
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
+  
+  pinMode(RELAY_PIN, OUTPUT); // <-- Se define el pin del relay como salida
+  
   digitalWrite(LED_ACCESS_GRANTED_PIN, LOW);
   digitalWrite(LED_ACCESS_DENIED_PIN, HIGH);
+  digitalWrite(RELAY_PIN, HIGH); // <-- Lo iniciamos en ALTO (que es APAGADO para Active-LOW)
+
   
   userIndexQueue = xQueueCreate(5, sizeof(int));
   
   // --- INICIO DE TAREAS ---
-  Serial.println(F("\nSistema de estacionamiento [ENTRADA] listo.")); // <-- CAMBIADO
+  Serial.println(F("\nSistema de estacionamiento [ENTRADA] listo."));
   
   xTaskCreate(taskReadRFID, "Read RFID Task", 4096, NULL, 1, NULL);
   xTaskCreate(taskControlActuators, "Control Actuators Task", 4096, NULL, 1, NULL);
   xTaskCreate(taskMqttManager, "MQTT Manager Task", 4096, NULL, 1, NULL);
-  xTaskCreate(taskReadBH1750, "BH1750 Task", 4096, NULL, 1, NULL); // <-- ARRANQUE DE TAREA NUEVA
+  xTaskCreate(taskReadBH1750, "BH1750 Task", 4096, NULL, 1, NULL);
 }
 
 // =========================================================
@@ -173,7 +182,7 @@ void taskReadRFID(void *parameter) {
         
         Serial.println("Tarjeta procesada. Esperando a que el auto pase...");
         isCarStablePresent = false;
-        vTaskDelay(pdMS_TO_TICKS(5000)); // <-- Un pequeño delay para que la otra tarea tome control
+        vTaskDelay(pdMS_TO_TICKS(5000)); 
 
       }
       else if (getHcsr04Distance() >= UMBRAL_DISTANCIA) {
@@ -191,7 +200,7 @@ void taskReadRFID(void *parameter) {
 }
 
 // =========================================================
-// --- TAREA 2: Controlar actuadores ---
+// --- TAREA 2: Controlar actuadores (CORREGIDA) ---
 // =========================================================
 void taskControlActuators(void *parameter) {
   int receivedUserIndex;
@@ -207,7 +216,7 @@ void taskControlActuators(void *parameter) {
         for (int i = 0; i < 3; i++) {
           digitalWrite(LED_ACCESS_DENIED_PIN, LOW);
           vTaskDelay(pdMS_TO_TICKS(150));
-          digitalWrite(LED_ACCESS_DENIED_PIN, HIGH);
+          digitalWrite(LED_ACCESS_DENIED_PIN, HIGH); // <-- ¡CORREGIDO!
           vTaskDelay(pdMS_TO_TICKS(150));
         }
       }
@@ -229,9 +238,12 @@ void taskMqttManager(void *parameter) {
 }
 
 // =========================================================
-// --- TAREA 4: LEER SENSOR BH1750 Y PUBLICAR (NUEVA) ---
+// --- TAREA 4: LEER SENSOR BH1750 Y CONTROLAR LUCES ---
 // =========================================================
 void taskReadBH1750(void *parameter) {
+  // Variable estática para guardar el estado de la luz (persiste entre ciclos)
+  static bool luzEncendida = false; // Inicia apagada
+
   // Espera 15 segundos la primera vez para que WiFi y MQTT se conecten
   vTaskDelay(pdMS_TO_TICKS(15000)); 
   
@@ -244,18 +256,33 @@ void taskReadBH1750(void *parameter) {
 
     // Publicar en MQTT (solo si está conectado)
     if (client.connected()) {
-      // Creamos buffer para convertir float a string
+      
+      // --- 1. Publicación del valor de luz (como ya estaba) ---
       char luxStr[8];
-
-      // dtostrf(variable, ancho_total, decimales, buffer_destino)
       dtostrf(lux, 4, 2, luxStr); 
-
-      // Publica en el tópico de "ambiente/luz"
       client.publish("estacionamiento/ambiente/luz", luxStr);
+
+
+      // --- 2. Lógica de control de luces con histéresis ---
+      
+      // Lógica para ENCENDER
+      if (lux < UMBRAL_LUZ_ON && !luzEncendida) {
+        luzEncendida = true; // Actualiza el estado
+        digitalWrite(RELAY_PIN, LOW); // (Active-LOW = ON)
+        client.publish("estacionamiento/luces/comando", "ON");
+        Serial.println("[CONTROL LUZ] Luz BAJA detectada. Activando relay (LOW) y enviando ON.");
+      }
+      // Lógica para APAGAR
+      else if (lux > UMBRAL_LUZ_OFF && luzEncendida) {
+        luzEncendida = false; // Actualiza el estado
+        digitalWrite(RELAY_PIN, HIGH); // (Active-LOW = OFF)
+        client.publish("estacionamiento/luces/comando", "OFF");
+        Serial.println("[CONTROL LUZ] Luz ALTA detectada. Desactivando relay (HIGH) y enviando OFF.");
+      }
     }
 
-    // Espera 1 minuto (60,000 ms) para la siguiente lectura
-    vTaskDelay(pdMS_TO_TICKS(60000)); 
+    // Espera 5 segundos (5,000 ms) para la siguiente lectura
+    vTaskDelay(pdMS_TO_TICKS(5000)); 
   }
 }
 
@@ -269,11 +296,10 @@ long getHcsr04Distance() {
   digitalWrite(TRIG_PIN, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
-  // Aumentar el timeout del pulseIn puede ayudar a evitar lecturas '0'
   long duration = pulseIn(ECHO_PIN, HIGH, 30000); // 30ms timeout
   long distance = (duration * 0.0343) / 2;
   if (distance == 0) {
-    return 999; // Retorna 999 si el pulso falló (timeout)
+    return 999; 
   }
   return distance;
 }
@@ -283,9 +309,6 @@ long getHcsr04Distance() {
 // --- FUNCIONES AUXILIARES DE APERTURA ---
 // =========================================================
 
-/**
- * Apertura para MODO REMOTO (Node-RED)
- */
 void openBarrierRemote() {
   digitalWrite(LED_ACCESS_GRANTED_PIN, HIGH);
   digitalWrite(LED_ACCESS_DENIED_PIN, LOW);
@@ -299,9 +322,6 @@ void openBarrierRemote() {
 }
 
 
-/**
- * Apertura para RFID (CON LÓGICA DE SENSOR Y TIMEOUT)
- */
 void openBarrierWithSensorLogic() {
   digitalWrite(LED_ACCESS_GRANTED_PIN, HIGH);
   digitalWrite(LED_ACCESS_DENIED_PIN, LOW);
@@ -312,12 +332,10 @@ void openBarrierWithSensorLogic() {
   Serial.println("Esperando a que el auto pase...");
 
   long distancia = 0;
-  bool autoDetectado = false; // Flag para saber si el auto está DEBAJO
+  bool autoDetectado = false; 
 
-  // --- Lógica de Timeout ---
-  uint32_t startTime = millis(); // Guarda el tiempo de inicio
-  const uint32_t TIMEOUT_MS = 15000; // Timeout de 15 segundos
-  // --- Fin Lógica de Timeout ---
+  uint32_t startTime = millis(); 
+  const uint32_t TIMEOUT_MS = 15000; 
 
   do {
     distancia = getHcsr04Distance();
@@ -326,7 +344,7 @@ void openBarrierWithSensorLogic() {
     if (distancia < UMBRAL_DISTANCIA) {
       if (!autoDetectado) {
         Serial.println("¡Auto detectado! Esperando a que pase...");
-        autoDetectado = true; // El auto está pasando por debajo
+        autoDetectado = true; 
       }
       digitalWrite(LED_ACCESS_GRANTED_PIN, LOW);
       vTaskDelay(pdMS_TO_TICKS(200));
@@ -334,25 +352,20 @@ void openBarrierWithSensorLogic() {
       vTaskDelay(pdMS_TO_TICKS(200));
 
     } else if (autoDetectado) {
-      // El auto ESTABA debajo (autoDetectado=true) y AHORA ya no está (distancia >= 15)
       Serial.println("Auto parece haber pasado. Dando 1 segundo de gracia...");
       vTaskDelay(pdMS_TO_TICKS(1000));
-      break; // <-- Salida normal del bucle
+      break; 
 
     } else {
-      // El auto NO está debajo (distancia >= 15) y NUNCA se detectó (autoDetectado=false)
       vTaskDelay(pdMS_TO_TICKS(500));
     }
     
-    // --- Chequeo de Timeout ---
-    // Si han pasado más de 15 segundos Y NUNCA detectamos al auto pasar...
     if (!autoDetectado && (millis() - startTime > TIMEOUT_MS)) {
         Serial.println("¡Timeout! El auto no cruzó (o pasó muy rápido). Cerrando pluma.");
-        break; // <-- Salida de emergencia del bucle
+        break; 
     }
-    // --- Fin Chequeo de Timeout ---
     
-  } while (distancia < UMBRAL_DISTANCIA || !autoDetectado); // Condición original
+  } while (distancia < UMBRAL_DISTANCIA || !autoDetectado); 
   
   Serial.println("Camino libre. Cerrando pluma.");
   plumaServo.write(0);
@@ -365,7 +378,6 @@ void openBarrierWithSensorLogic() {
 // --- FUNCIONES MQTT (MODIFICADAS PARA LA ENTRADA) ---
 // =========================================================
 
-// Función de publicación MQTT
 void publishAccessEvent(int userIndex) {
     if (!client.connected()) return;
     char timeBuffer[20];
@@ -386,7 +398,6 @@ void publishAccessEvent(int userIndex) {
         userName = "Desconocido";
     }
 
-    // Publica en los tópicos de "entrada"
     client.publish("estacionamiento/entrada/usuario", userName);
     client.publish("estacionamiento/entrada/tiempo", timeBuffer);
     client.publish("estacionamiento/entrada/status", status);
@@ -394,19 +405,16 @@ void publishAccessEvent(int userIndex) {
     Serial.printf("--- Evento publicado [ENTRADA]: Usuario: %s, Status: %s ---\n", userName, status);
 }
 
-// Función de reconexión MQTT
 void mqttReconnect() {
   while (!client.connected()) {
     Serial.print("Intentando conexión MQTT...");
     
-    // ClientID único para la ENTRADA
     char clientId[50];
     sprintf(clientId, "ESP32_Estacionamiento_Entrada-%ld", random(1000));
     
     if (client.connect(clientId, mqttUser, mqttPassword)) {
       Serial.println(" conectado!");
       
-      // Se suscribe al tópico de comando de "entrada"
       client.subscribe("estacionamiento/entrada/comando");
       Serial.println("Suscrito a 'estacionamiento/entrada/comando'");
       
@@ -419,7 +427,6 @@ void mqttReconnect() {
   }
 }
 
-// Función de Callback
 void callback(char* topic, byte* message, unsigned int length) {
   String stMessage;
   for (int i = 0; i < length; i++) {
@@ -427,7 +434,6 @@ void callback(char* topic, byte* message, unsigned int length) {
   }
   Serial.printf("Mensaje recibido en [%s]: %s\n", topic, stMessage.c_str());
 
-  // Revisa el tópico de comando de "entrada"
   if (String(topic) == "estacionamiento/entrada/comando") {
     if (stMessage == "abrir") {
       Serial.println("Comando de apertura remota recibido!");
