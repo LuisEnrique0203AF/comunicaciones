@@ -14,9 +14,14 @@
 // =========================================================
 // --- CONFIGURACIÓN (Tus datos actualizados) ---
 // =========================================================
-const char* ssid = "EnlaceFTTH_CASA_2.4G";
-const char* password = "6481211001";
-const char* mqttServer = "192.168.1.241";
+//const char* ssid = "EnlaceFTTH_CASA_2.4G";
+//const char* password = "6481211001";
+//const char* mqttServer = "192.168.1.241";
+
+const char* ssid = "Laura";
+const char* password = "12345678";
+const char* mqttServer = "192.168.137.117";
+
 const int   mqttPort = 1883;
 const char* mqttUser = "luisenrique";
 const char* mqttPassword = "enrique02";
