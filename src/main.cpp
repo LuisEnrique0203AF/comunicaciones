@@ -3,7 +3,7 @@
  * Proyecto de Estacionamiento IoT - Módulo de SALIDA
  * Autor: 
  * Fecha: Diciembre 2025
- * Institución: Instituto Tecnologico de Chihuahua
+ * Instituto Tecnologico de Chihuahua
  *
  * Descripción:
  * Este código controla el sistema de SALIDA de un estacionamiento IoT usando un ESP32.
