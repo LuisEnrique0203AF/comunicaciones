@@ -48,8 +48,12 @@ const char* mqttServer = "192.168.1.241"; // IP del broker (ej. Raspberry Pi)
 const int   mqttPort = 1883;
 const char* mqttUser = "luisenrique";
 const char* mqttPassword = "enrique02";
-// --- Configuración de Servidor de Tiempo (NTP) ---
-const char* ntpServer = "pool.ntp.org";
+
+// --- Configuración de Servidores de Tiempo (NTP) ---
+// Se añaden dos servidores: uno principal y uno de respaldo por si falla el primero.
+const char* ntpServer1 = "pool.ntp.org";    // Servidor Principal
+const char* ntpServer2 = "time.google.com"; // Servidor de Respaldo (Backup)
+
 const long  gmtOffset_sec = -6 * 3600; // Offset GMT (Chihuahua es GMT-6)
 const int   daylightOffset_sec = 0;   // Offset de horario de verano (0 = desactivado)
 
@@ -144,8 +148,9 @@ void setup() {
   Serial.println(WiFi.localIP());
 
   // --- 3. CONFIGURACIÓN DE TIEMPO (NTP) ---
-  // Se usa para poner la fecha/hora correcta en los eventos MQTT
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  // Se usa para poner la fecha/hora correcta en los eventos MQTT.
+  // Se configuran el servidor principal y el de respaldo.
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer1, ntpServer2);
 
   // --- 4. CONFIGURACIÓN MQTT ---
   client.setServer(mqttServer, mqttPort); // Apunta el cliente al broker
