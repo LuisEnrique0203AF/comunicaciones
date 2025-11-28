@@ -41,10 +41,10 @@
 // --- CONFIGURACIÓN GLOBAL (DATOS SENSIBLES Y DE RED) ---
 // =========================================================
 // --- Credenciales WiFi ---
-const char* ssid = "EnlaceFTTH_CASA_2.4G";
-const char* password = "6481211001";
+const char* ssid = "Xiaomi Pad 6";
+const char* password = "12345678";
 // --- Configuración del Broker MQTT ---
-const char* mqttServer = "192.168.1.241"; // IP del broker (ej. Raspberry Pi)
+const char* mqttServer = "10.44.254.49"; // IP del broker (ej. Raspberry Pi)
 const int   mqttPort = 1883;
 const char* mqttUser = "luisenrique";
 const char* mqttPassword = "enrique02";
