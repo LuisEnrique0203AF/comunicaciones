@@ -1,7 +1,10 @@
 /**
  * ===================================================================================
  * Proyecto de Estacionamiento IoT - Módulo de SALIDA
- * Autor: 
+ * Autores:
+ * Luis Enrique Aguilera Fierro						                                     21060671
+ * Victor Francisco Duarte Villalobos                                          21060670
+ * Laura Liliana Morones Báez						                                       21060693
  * Fecha: Diciembre 2025
  * Instituto Tecnologico de Chihuahua
  *
