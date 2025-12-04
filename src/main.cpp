@@ -1,7 +1,11 @@
 /**
  * ===================================================================================
  * Proyecto de Estacionamiento con 3 Sensores VL53L0X y FreeRTOS
- * Autor: 
+ * Autores: 
+ * Luis Enrique Aguilera Fierro						                                     21060671
+ * Victor Francisco Duarte Villalobos                                          21060670
+ * Laura Liliana Morones Báez						                                       21060693
+ * 
  * Fecha: Diciembre 2025
  * Institución: Instituto Tecnologico de Chihuahua
  *
